@@ -94,7 +94,10 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>
+      </AdditionalDependencies>
+      <AdditionalLibraryDirectories>
+      </AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -146,6 +149,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="lab2.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ThreadPool\ThreadPool.vcxproj">
+      <Project>{3f78936c-270f-4b4e-abe7-903eaed22c1f}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

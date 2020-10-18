@@ -6,10 +6,14 @@ Task::Task(LPTHREAD_START_ROUTINE threadProc, LPVOID lpParam) {
 	param = lpParam;
 }
 
-Thread::Thread(Task* task) {
-	execTask = task;
+Thread::Thread() {
+	execTask = NULL;
 	InitializeCriticalSection(&cs);
 	InitializeConditionVariable(&cv);
+}
+
+Thread::~Thread() {
+
 }
 
 DWORD WINAPI ThreadPool::ManagerThreadStart(LPVOID lpParam) {
@@ -22,10 +26,14 @@ DWORD ThreadPool::ManagerThreadMain() {
 		SleepConditionVariableCS(&cvThreadQueue, &csThreadQueue, INFINITE);
 	LeaveCriticalSection(&csThreadQueue);
 
-	while (notDestructed) {
+	while (!Destructed) {
 		EnterCriticalSection(&csTaskQueue);
-		while (taskQueue.empty())
+		while (taskQueue.empty() && !Destructed)
 			SleepConditionVariableCS(&cvTaskQueue, &csTaskQueue, INFINITE);
+		if (Destructed) {
+			LeaveCriticalSection(&csTaskQueue);
+			return 0;
+		}
 		Task* task = taskQueue.front();
 		taskQueue.pop();
 		LeaveCriticalSection(&csTaskQueue);
@@ -46,6 +54,7 @@ DWORD ThreadPool::ManagerThreadMain() {
 			threadQueue.back()->execTask = task;
 			WakeConditionVariable(&threadQueue.back()->cv);
 		}
+		runningThreadAmount++;
 		LeaveCriticalSection(&csThreadQueue);
 	}
 	return 0;
@@ -62,15 +71,20 @@ DWORD ThreadPool::ThreadMain() {
 	WakeConditionVariable(&cvThreadQueue);
 	LeaveCriticalSection(&csThreadQueue);
 
-	while (notDestructed) {	
+	while (!Destructed) {	
 		EnterCriticalSection(&thread->cs);
-		while (thread->execTask == NULL)
+		while (thread->execTask == NULL && !Destructed)
 			SleepConditionVariableCS(&thread->cv, &thread->cs, INFINITE);
+		if (Destructed) {
+			LeaveCriticalSection(&thread->cs);
+			return 0;
+		}
 		Task* task = thread->execTask;
-		delete thread->execTask;
+		thread->execTask = NULL;
 		runningThreadAmount--;
 		LeaveCriticalSection(&thread->cs);
 		task->proc(task->param);
+		delete task;
 	}
 	return 0;
 }
@@ -83,7 +97,7 @@ VOID ThreadPool::AddTask(LPTHREAD_START_ROUTINE threadProc, LPVOID lpParam) {
 }
 
 ThreadPool::ThreadPool(int maxAmount) {
-	notDestructed = true;
+	Destructed = false;
 	initThreadAmount = 3;
 	maxThreadAmount = maxAmount;
 	runningThreadAmount = 0;
@@ -99,13 +113,23 @@ ThreadPool::ThreadPool(int maxAmount) {
 }
 
 ThreadPool::~ThreadPool() {
-	notDestructed = false;
+	Sleep(100);
+	Destructed = true;
 	WakeAllConditionVariable(&cvTaskQueue);
 	WakeAllConditionVariable(&cvThreadQueue);
 	WaitForSingleObject(managerThread, INFINITE);
-	for (int i = 0; i < threads.size(); i++)
-	{
+	for (int i = 0; i < threadQueue.size(); i++) {
+		Thread* thread = threadQueue.front();
+		WakeAllConditionVariable(&thread->cv);
+		threadQueue.pop();
+		threadQueue.push(thread);
+	}
+	for (int i = 0; i < threads.size(); i++) {
 		WaitForSingleObject(threads[i], INFINITE);
+	}
+	while (!threadQueue.empty()) {
+		DeleteCriticalSection(&threadQueue.back()->cs);
+		threadQueue.pop();
 	}
 	DeleteCriticalSection(&csTaskQueue);
 	DeleteCriticalSection(&csThreadQueue);

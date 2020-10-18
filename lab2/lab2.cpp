@@ -10,10 +10,9 @@ DWORD WINAPI MyFunc(LPVOID lpParam)
 int main()
 {
     ThreadPool* threadPool = new ThreadPool(5);
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 15; i++)
     {
         threadPool->AddTask(MyFunc);
     }
-    Sleep(100);
-    //threadPool->~ThreadPool();
+    threadPool->~ThreadPool();
 }

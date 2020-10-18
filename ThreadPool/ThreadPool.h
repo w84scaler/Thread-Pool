@@ -19,7 +19,8 @@ public:
 
 class Thread {
 public:
-	Thread(Task* task = NULL);
+	Thread();
+	~Thread();
 
 	Task* execTask;
 	CRITICAL_SECTION cs;
@@ -28,7 +29,7 @@ public:
 
 extern "C" class THREADPOOL_API ThreadPool {
 private:
-	bool notDestructed;
+	bool Destructed;
 
 	CRITICAL_SECTION csTaskQueue;
 	CRITICAL_SECTION csThreadQueue;

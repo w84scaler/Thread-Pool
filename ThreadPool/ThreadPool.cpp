@@ -18,7 +18,7 @@ DWORD WINAPI ThreadPool::ManagerThreadStart(LPVOID lpParam) {
 
 DWORD ThreadPool::ManagerThreadMain() {
 	EnterCriticalSection(&csThreadQueue);
-	while (taskQueue.size() < initThreadAmount)
+	while (threadQueue.size() < initThreadAmount)
 		SleepConditionVariableCS(&cvThreadQueue, &csThreadQueue, INFINITE);
 	LeaveCriticalSection(&csThreadQueue);
 
@@ -37,12 +37,15 @@ DWORD ThreadPool::ManagerThreadMain() {
 				threadQueue.pop();
 				threadQueue.push(thread);
 			}
+			threadQueue.front()->execTask = task;
+			WakeConditionVariable(&threadQueue.front()->cv);
 		}
 		else {
 			threads.push_back(CreateThread(NULL, 0, ThreadStart, (LPVOID)this, 0, NULL));
 			SleepConditionVariableCS(&cvThreadQueue, &csThreadQueue, INFINITE);
+			threadQueue.back()->execTask = task;
+			WakeConditionVariable(&threadQueue.back()->cv);
 		}
-		threadQueue.back()->execTask = task;
 		LeaveCriticalSection(&csThreadQueue);
 	}
 	return 0;
@@ -63,10 +66,11 @@ DWORD ThreadPool::ThreadMain() {
 		EnterCriticalSection(&thread->cs);
 		while (thread->execTask == NULL)
 			SleepConditionVariableCS(&thread->cv, &thread->cs, INFINITE);
-		thread->execTask->proc(thread->execTask->param);
+		Task* task = thread->execTask;
 		delete thread->execTask;
 		runningThreadAmount--;
 		LeaveCriticalSection(&thread->cs);
+		task->proc(task->param);
 	}
 	return 0;
 }
@@ -89,10 +93,9 @@ ThreadPool::ThreadPool(int maxAmount) {
 	InitializeConditionVariable(&cvTaskQueue);
 	InitializeConditionVariable(&cvThreadQueue);
 
+	managerThread = CreateThread(NULL, 0, ManagerThreadStart, (LPVOID)this, 0, NULL);
 	for (int i = 0; i < initThreadAmount; i++)
 		threads.push_back(CreateThread(NULL, 0, ThreadStart, (LPVOID)this, 0, NULL));
-	managerThread = CreateThread(NULL, 0, ManagerThreadStart, (LPVOID)this, 0, NULL);
-	
 }
 
 ThreadPool::~ThreadPool() {

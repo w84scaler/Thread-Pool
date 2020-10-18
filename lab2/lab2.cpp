@@ -14,5 +14,6 @@ int main()
     {
         threadPool->AddTask(MyFunc);
     }
-    threadPool->~ThreadPool();
+    Sleep(100);
+    //threadPool->~ThreadPool();
 }

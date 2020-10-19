@@ -7,7 +7,6 @@
 #endif
 
 #include <queue>
-#include <vector>
 
 class Task {
 public:
@@ -22,7 +21,8 @@ public:
 	Thread();
 	~Thread();
 
-	Task* execTask;
+	Task* task;
+	HANDLE handler;
 	CRITICAL_SECTION cs;
 	CONDITION_VARIABLE cv;
 };
@@ -30,6 +30,8 @@ public:
 extern "C" class THREADPOOL_API ThreadPool {
 private:
 	bool Destructed;
+
+	CRITICAL_SECTION csWorkThreadAmount;
 
 	CRITICAL_SECTION csTaskQueue;
 	CRITICAL_SECTION csThreadQueue;
@@ -41,10 +43,9 @@ private:
 
 	int initThreadAmount;
 	int maxThreadAmount;
-	int runningThreadAmount;
+	int workThreadAmount;
 
 	HANDLE managerThread;
-	std::vector<HANDLE> threads;
 
 	DWORD ManagerThreadMain();
 	DWORD ThreadMain();
@@ -55,5 +56,5 @@ private:
 public:
 	ThreadPool(int maxAmount);
 	~ThreadPool();
-	VOID AddTask(LPTHREAD_START_ROUTINE ThreadProc, LPVOID lpParam = NULL);
+	BOOL AddTask(LPTHREAD_START_ROUTINE ThreadProc, LPVOID lpParam = NULL);
 };

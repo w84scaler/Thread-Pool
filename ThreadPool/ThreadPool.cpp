@@ -7,13 +7,17 @@ Task::Task(LPTHREAD_START_ROUTINE threadProc, LPVOID lpParam) {
 }
 
 Thread::Thread() {
-	execTask = NULL;
+	task = NULL;
+	handler = OpenThread(THREAD_ALL_ACCESS, true, GetCurrentThreadId());
 	InitializeCriticalSection(&cs);
 	InitializeConditionVariable(&cv);
 }
 
 Thread::~Thread() {
-
+	WakeAllConditionVariable(&cv);
+	WaitForSingleObject(handler, INFINITE);
+	DeleteCriticalSection(&cs);
+	CloseHandle(handler);
 }
 
 DWORD WINAPI ThreadPool::ManagerThreadStart(LPVOID lpParam) {
@@ -39,23 +43,30 @@ DWORD ThreadPool::ManagerThreadMain() {
 		LeaveCriticalSection(&csTaskQueue);
 
 		EnterCriticalSection(&csThreadQueue);
-		if (runningThreadAmount < threads.size()) {
-			while (threadQueue.front()->execTask != NULL) {
-				Thread* thread = threadQueue.front();
+		Thread* thread;
+		if (workThreadAmount < threadQueue.size() || maxThreadAmount == threadQueue.size()) {
+			while (threadQueue.front()->task != NULL) {
+				Thread* stillWorkThread = threadQueue.front();
 				threadQueue.pop();
-				threadQueue.push(thread);
+				threadQueue.push(stillWorkThread);
 			}
-			threadQueue.front()->execTask = task;
-			WakeConditionVariable(&threadQueue.front()->cv);
+			thread = threadQueue.front();
 		}
 		else {
-			threads.push_back(CreateThread(NULL, 0, ThreadStart, (LPVOID)this, 0, NULL));
+			CreateThread(NULL, 0, ThreadStart, (LPVOID)this, 0, NULL);
 			SleepConditionVariableCS(&cvThreadQueue, &csThreadQueue, INFINITE);
-			threadQueue.back()->execTask = task;
-			WakeConditionVariable(&threadQueue.back()->cv);
+			thread = threadQueue.back();
 		}
-		runningThreadAmount++;
 		LeaveCriticalSection(&csThreadQueue);
+
+		EnterCriticalSection(&csWorkThreadAmount);
+		workThreadAmount++;
+		LeaveCriticalSection(&csWorkThreadAmount);
+
+		EnterCriticalSection(&thread->cs);
+		thread->task = task;
+		WakeConditionVariable(&thread->cv);
+		LeaveCriticalSection(&thread->cs);
 	}
 	return 0;
 }
@@ -70,38 +81,54 @@ DWORD ThreadPool::ThreadMain() {
 	threadQueue.push(thread);
 	WakeConditionVariable(&cvThreadQueue);
 	LeaveCriticalSection(&csThreadQueue);
-
 	while (!Destructed) {	
 		EnterCriticalSection(&thread->cs);
-		while (thread->execTask == NULL && !Destructed)
+		while (thread->task == NULL && !Destructed)
 			SleepConditionVariableCS(&thread->cv, &thread->cs, INFINITE);
 		if (Destructed) {
 			LeaveCriticalSection(&thread->cs);
 			return 0;
 		}
-		Task* task = thread->execTask;
-		thread->execTask = NULL;
-		runningThreadAmount--;
+		Task* task = thread->task;
+		thread->task = NULL;
 		LeaveCriticalSection(&thread->cs);
+
 		task->proc(task->param);
 		delete task;
+
+		EnterCriticalSection(&csWorkThreadAmount);
+		workThreadAmount--;
+		LeaveCriticalSection(&csWorkThreadAmount);
 	}
 	return 0;
 }
 
-VOID ThreadPool::AddTask(LPTHREAD_START_ROUTINE threadProc, LPVOID lpParam) {
-	EnterCriticalSection(&csTaskQueue);
-	taskQueue.push(new Task(threadProc, lpParam));
-	WakeConditionVariable(&cvTaskQueue);
-	LeaveCriticalSection(&csTaskQueue);
+BOOL ThreadPool::AddTask(LPTHREAD_START_ROUTINE threadProc, LPVOID lpParam) {
+	bool isFull = false;
+	EnterCriticalSection(&csWorkThreadAmount);
+	if (workThreadAmount == maxThreadAmount)
+		isFull = true;
+	LeaveCriticalSection(&csWorkThreadAmount);
+
+	if (!isFull) {
+		EnterCriticalSection(&csTaskQueue);
+		taskQueue.push(new Task(threadProc, lpParam));
+		WakeConditionVariable(&cvTaskQueue);
+		LeaveCriticalSection(&csTaskQueue);
+		return true;
+	}
+	else {
+		return false;
+	}
 }
 
 ThreadPool::ThreadPool(int maxAmount) {
 	Destructed = false;
 	initThreadAmount = 3;
 	maxThreadAmount = maxAmount;
-	runningThreadAmount = 0;
+	workThreadAmount = 0;
 
+	InitializeCriticalSection(&csWorkThreadAmount);
 	InitializeCriticalSection(&csTaskQueue);
 	InitializeCriticalSection(&csThreadQueue);
 	InitializeConditionVariable(&cvTaskQueue);
@@ -109,33 +136,20 @@ ThreadPool::ThreadPool(int maxAmount) {
 
 	managerThread = CreateThread(NULL, 0, ManagerThreadStart, (LPVOID)this, 0, NULL);
 	for (int i = 0; i < initThreadAmount; i++)
-		threads.push_back(CreateThread(NULL, 0, ThreadStart, (LPVOID)this, 0, NULL));
+		CreateThread(NULL, 0, ThreadStart, (LPVOID)this, 0, NULL);
 }
 
 ThreadPool::~ThreadPool() {
-	Sleep(100);
 	Destructed = true;
 	WakeAllConditionVariable(&cvTaskQueue);
 	WakeAllConditionVariable(&cvThreadQueue);
 	WaitForSingleObject(managerThread, INFINITE);
-	for (int i = 0; i < threadQueue.size(); i++) {
-		Thread* thread = threadQueue.front();
-		WakeAllConditionVariable(&thread->cv);
-		threadQueue.pop();
-		threadQueue.push(thread);
-	}
-	for (int i = 0; i < threads.size(); i++) {
-		WaitForSingleObject(threads[i], INFINITE);
-	}
 	while (!threadQueue.empty()) {
-		DeleteCriticalSection(&threadQueue.back()->cs);
+		Thread* thread = threadQueue.front();
 		threadQueue.pop();
+		thread->~Thread();
 	}
 	DeleteCriticalSection(&csTaskQueue);
 	DeleteCriticalSection(&csThreadQueue);
-
-	CloseHandle(managerThread);
-	for (int i = 0; i < threads.size(); i++) {
-		CloseHandle(threads[i]);
-	}
+	DeleteCriticalSection(&csWorkThreadAmount);
 }

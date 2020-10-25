@@ -1,14 +1,16 @@
 #include "pch.h"
 #include "ThreadPool.h"
 
-Task::Task(LPTHREAD_START_ROUTINE threadProc, LPVOID lpParam) {
+Task::Task(int taskID, LPTHREAD_START_ROUTINE threadProc, LPVOID lpParam) {
 	proc = threadProc;
 	param = lpParam;
+	id = taskID;
 }
 
 Thread::Thread() {
 	task = NULL;
-	handler = OpenThread(THREAD_ALL_ACCESS, true, GetCurrentThreadId());
+	id = GetCurrentThreadId();
+	handler = OpenThread(THREAD_ALL_ACCESS, true, id);
 	InitializeCriticalSection(&cs);
 	InitializeConditionVariable(&cv);
 }
@@ -43,30 +45,47 @@ DWORD ThreadPool::ManagerThreadMain() {
 		LeaveCriticalSection(&csTaskQueue);
 
 		EnterCriticalSection(&csThreadQueue);
-		Thread* thread;
+		Thread* thread = NULL;
+
+		/*EnterCriticalSection(&csWorkThreadAmount);
+		int work = workThreadAmount;
+		LeaveCriticalSection(&csWorkThreadAmount);*/
+
 		if (workThreadAmount < threadQueue.size() || maxThreadAmount == threadQueue.size()) {
-			while (threadQueue.front()->task != NULL) {
-				Thread* stillWorkThread = threadQueue.front();
-				threadQueue.pop();
-				threadQueue.push(stillWorkThread);
+			if (workThreadAmount < threadQueue.size()) {
+				while (threadQueue.front()->task != NULL) {
+					Thread* stillWorkThread = threadQueue.front();
+					threadQueue.pop();
+					threadQueue.push(stillWorkThread);
+				}
+				thread = threadQueue.front();
 			}
-			thread = threadQueue.front();
+			else {
+				EnterCriticalSection(&logger->cs);
+				logger->TaskSkipped(task->id);
+				LeaveCriticalSection(&logger->cs);
+			}
 		}
 		else {
 			CreateThread(NULL, 0, ThreadStart, (LPVOID)this, 0, NULL);
 			SleepConditionVariableCS(&cvThreadQueue, &csThreadQueue, INFINITE);
 			thread = threadQueue.back();
+			EnterCriticalSection(&logger->cs);
+			logger->ThreadAdded(thread->id);
+			LeaveCriticalSection(&logger->cs);
 		}
 		LeaveCriticalSection(&csThreadQueue);
 
-		EnterCriticalSection(&csWorkThreadAmount);
-		workThreadAmount++;
-		LeaveCriticalSection(&csWorkThreadAmount);
+		if (thread != NULL) {
+			EnterCriticalSection(&csWorkThreadAmount);
+			workThreadAmount++;
+			LeaveCriticalSection(&csWorkThreadAmount);
 
-		EnterCriticalSection(&thread->cs);
-		thread->task = task;
-		WakeConditionVariable(&thread->cv);
-		LeaveCriticalSection(&thread->cs);
+			EnterCriticalSection(&thread->cs);
+			thread->task = task;
+			WakeConditionVariable(&thread->cv);
+			LeaveCriticalSection(&thread->cs);
+		}
 	}
 	return 0;
 }
@@ -90,10 +109,31 @@ DWORD ThreadPool::ThreadMain() {
 			return 0;
 		}
 		Task* task = thread->task;
+		LeaveCriticalSection(&thread->cs);
+		
+		EnterCriticalSection(&logger->cs);
+		logger->ThreadGotTask(thread->id, task->id);
+		LeaveCriticalSection(&logger->cs);
+
+		try
+		{
+			task->proc(task->param);
+		}
+		catch (const char* e)
+		{
+			EnterCriticalSection(&logger->cs);
+			logger->TaskThrowedException(thread->id, e);
+			LeaveCriticalSection(&logger->cs);
+		}
+
+		EnterCriticalSection(&thread->cs);
 		thread->task = NULL;
 		LeaveCriticalSection(&thread->cs);
 
-		task->proc(task->param);
+		EnterCriticalSection(&logger->cs);
+		logger->ThreadFreed(thread->id, task->id);
+		LeaveCriticalSection(&logger->cs);
+
 		delete task;
 
 		EnterCriticalSection(&csWorkThreadAmount);
@@ -104,29 +144,41 @@ DWORD ThreadPool::ThreadMain() {
 }
 
 BOOL ThreadPool::AddTask(LPTHREAD_START_ROUTINE threadProc, LPVOID lpParam) {
-	bool isFull = false;
+	taskAmount++;
+
 	EnterCriticalSection(&csWorkThreadAmount);
-	if (workThreadAmount == maxThreadAmount)
-		isFull = true;
+	int work = workThreadAmount;
 	LeaveCriticalSection(&csWorkThreadAmount);
+	bool isFull = false;
+	if (work == maxThreadAmount)
+		isFull = true;
 
 	if (!isFull) {
 		EnterCriticalSection(&csTaskQueue);
-		taskQueue.push(new Task(threadProc, lpParam));
+		taskQueue.push(new Task(taskAmount, threadProc, lpParam));
 		WakeConditionVariable(&cvTaskQueue);
 		LeaveCriticalSection(&csTaskQueue);
+		EnterCriticalSection(&logger->cs);
+		logger->TaskAdded(taskAmount);
+		LeaveCriticalSection(&logger->cs);
 		return true;
 	}
 	else {
+		EnterCriticalSection(&logger->cs);
+		logger->TaskSkipped(taskAmount);
+		LeaveCriticalSection(&logger->cs);
 		return false;
 	}
 }
 
 ThreadPool::ThreadPool(int maxAmount) {
+	logger = new ThreadPoolLogger("D:\\log.txt");
+
 	Destructed = false;
 	initThreadAmount = 3;
 	maxThreadAmount = maxAmount;
 	workThreadAmount = 0;
+	taskAmount = 0;
 
 	InitializeCriticalSection(&csWorkThreadAmount);
 	InitializeCriticalSection(&csTaskQueue);
@@ -137,6 +189,9 @@ ThreadPool::ThreadPool(int maxAmount) {
 	managerThread = CreateThread(NULL, 0, ManagerThreadStart, (LPVOID)this, 0, NULL);
 	for (int i = 0; i < initThreadAmount; i++)
 		CreateThread(NULL, 0, ThreadStart, (LPVOID)this, 0, NULL);
+	EnterCriticalSection(&logger->cs);
+	logger->PoolCreated(initThreadAmount, maxThreadAmount);
+	LeaveCriticalSection(&logger->cs);
 }
 
 ThreadPool::~ThreadPool() {
@@ -147,9 +202,13 @@ ThreadPool::~ThreadPool() {
 	while (!threadQueue.empty()) {
 		Thread* thread = threadQueue.front();
 		threadQueue.pop();
+		int id = thread->id;
 		thread->~Thread();
+		logger->ThreadDestroyed(id);
 	}
 	DeleteCriticalSection(&csTaskQueue);
 	DeleteCriticalSection(&csThreadQueue);
 	DeleteCriticalSection(&csWorkThreadAmount);
+	logger->PoolDestroyed();
+	logger->~ThreadPoolLogger();
 }

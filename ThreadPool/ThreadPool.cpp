@@ -146,11 +146,11 @@ DWORD ThreadPool::ThreadMain() {
 BOOL ThreadPool::AddTask(LPTHREAD_START_ROUTINE threadProc, LPVOID lpParam) {
 	taskAmount++;
 
-	EnterCriticalSection(&csWorkThreadAmount);
+	/*EnterCriticalSection(&csWorkThreadAmount);
 	int work = workThreadAmount;
-	LeaveCriticalSection(&csWorkThreadAmount);
+	LeaveCriticalSection(&csWorkThreadAmount);*/
 	bool isFull = false;
-	if (work == maxThreadAmount)
+	if (workThreadAmount == maxThreadAmount)
 		isFull = true;
 
 	if (!isFull) {
